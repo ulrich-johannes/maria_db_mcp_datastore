@@ -1,0 +1,25 @@
+# fly.toml app configuration for datastore-mcp
+# Replace `app` below with your actual Fly.io app name (must be globally unique),
+# e.g. by running: fly apps create <your-app-name>
+
+app = "datastore-mcp"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "8080"
+  # PUBLIC_URL should be set to https://<app>.fly.dev via `fly secrets set`
+  # or left here if you don't consider it sensitive.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
