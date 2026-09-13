@@ -9,6 +9,10 @@ const pool = mariadb.createPool({
   database: config.db.database,
   ssl: config.db.ssl ? {} : undefined,
   connectionLimit: 5,
+  // Fail fast and visibly on an unreachable/misconfigured DB instead of
+  // hanging past a platform's deploy health-check window.
+  connectTimeout: 5000,
+  acquireTimeout: 8000,
 });
 
 // Table name comes from an env var and is validated as a plain SQL identifier

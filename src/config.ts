@@ -1,5 +1,20 @@
 import "dotenv/config";
 
+// Printed unconditionally, before any validation, so a missing/misconfigured
+// var is diagnosable from logs even if something below throws.
+const REQUIRED_VARS = [
+  "DB_USER",
+  "DB_PASSWORD",
+  "DB_NAME",
+  "DB_TABLE",
+  "OAUTH_USERNAME",
+  "OAUTH_PASSWORD",
+];
+console.log(
+  "[datastore-mcp] booting; required env vars present:",
+  Object.fromEntries(REQUIRED_VARS.map((name) => [name, Boolean(process.env[name])]))
+);
+
 function required(name: string): string {
   const value = process.env[name];
   if (!value) {

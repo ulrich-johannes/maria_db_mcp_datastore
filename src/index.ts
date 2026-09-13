@@ -122,5 +122,10 @@ async function main() {
 
 main().catch((err) => {
   console.error("Fatal startup error:", err);
-  process.exit(1);
+  // Do NOT call process.exit() here: stdout/stderr are often piped (as in a
+  // Docker/Fly.io container), where writes are asynchronous. An explicit
+  // exit() can terminate the process before the error above is flushed,
+  // making crashes look like silent, logless deaths. Setting exitCode and
+  // letting Node shut down naturally waits for pending writes to flush.
+  process.exitCode = 1;
 });
