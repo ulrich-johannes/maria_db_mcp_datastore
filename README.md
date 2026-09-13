@@ -74,6 +74,17 @@ See [`.env.example`](.env.example) for the full list:
    ```
    Update the `app = "..."` line in [`fly.toml`](fly.toml) to match.
 
+   Then allocate a public IP so `<your-app-name>.fly.dev` actually resolves —
+   this isn't something `fly.toml` can declare, it's a one-time action against
+   the app itself:
+   ```bash
+   fly ips allocate-v6 -a <your-app-name>
+   fly ips allocate-v4 --shared -a <your-app-name>
+   ```
+   (`fly launch` usually does this automatically; `fly apps create` alone does
+   not — if you skip this, the hostname returns `NXDOMAIN`/no DNS record and
+   the service is unreachable even though it's running fine.)
+
 2. **Set secrets** (never commit these — use `fly secrets`, not `[env]` in `fly.toml`):
    ```bash
    fly secrets set \
@@ -87,16 +98,14 @@ See [`.env.example`](.env.example) for the full list:
    connection such as a Fly.io WireGuard peer / Tailscale, depending on where
    it's hosted).
 
-3. **Get a Fly API token for CI**:
-   ```bash
-   fly tokens create deploy -x 999999h
-   ```
-   Add it as a GitHub Actions repository secret named `FLY_API_TOKEN`
-   (Settings → Secrets and variables → Actions).
-
-4. **Push to `main`** — [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-   builds the Docker image and runs `flyctl deploy` on every push to `main`
-   (and can be triggered manually via the Actions tab).
+3. **Deploy on push to `main`.** This repo is wired to Fly.io's GitHub
+   integration (set up via `fly launch`'s GitHub connection), which builds
+   and deploys automatically on push — there's no `.github/workflows/*.yml`
+   in this repo driving it. If you'd rather drive deploys from a GitHub
+   Actions workflow instead, create `.github/workflows/deploy.yml` running
+   `flyctl deploy --remote-only` on push, authenticated with a repo secret
+   `FLY_API_TOKEN` from `fly tokens create deploy -x 999999h` — just don't run
+   both mechanisms at once, or you'll get duplicate/competing deploys.
 
 ## Connecting an AI client
 

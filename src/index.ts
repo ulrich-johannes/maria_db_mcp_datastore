@@ -25,7 +25,11 @@ async function main() {
   const authProvider = new SingleUserAuthProvider();
 
   const app = express();
-  app.set("trust proxy", true);
+  // Fly.io puts exactly one proxy hop in front of the app; trusting only that
+  // hop (rather than `true`, which trusts an unbounded chain and lets a
+  // client spoof X-Forwarded-For) is what express-rate-limit requires for
+  // safe IP-based rate limiting.
+  app.set("trust proxy", 1);
 
   // OAuth 2.1 authorization server endpoints: /authorize, /token, /register,
   // and the /.well-known/* metadata documents.
