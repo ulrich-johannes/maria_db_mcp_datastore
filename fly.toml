@@ -1,25 +1,24 @@
-# fly.toml app configuration for datastore-mcp
-# Replace `app` below with your actual Fly.io app name (must be globally unique),
-# e.g. by running: fly apps create <your-app-name>
+# fly.toml app configuration file generated for maria-db-mcp-datastore on 2026-09-13T18:28:53Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "datastore-mcp"
-primary_region = "iad"
+app = 'maria-db-mcp-datastore'
+primary_region = 'ams'
 
 [build]
 
 [env]
-  PORT = "8080"
-  # PUBLIC_URL should be set to https://<app>.fly.dev via `fly secrets set`
-  # or left here if you don't consider it sensitive.
+  PORT = '8080'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "off"
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
 
 [[vm]]
-  cpu_kind = "shared"
+  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 256
