@@ -41,10 +41,12 @@ MCP client connects.
 **Limitations to be aware of (fine for a personal/single-user tool, not for
 multi-tenant use):**
 - Tokens and pending logins are kept in memory, not persisted — they're lost
-  on redeploy/restart, so the app is configured to keep at least one machine
-  always running (see `fly.toml`) rather than scale-to-zero.
-- Refresh tokens aren't implemented; when an access token expires (1 hour)
-  the client re-runs the OAuth flow, which just means logging in again.
+  on redeploy/restart (a well-behaved client just re-runs the OAuth flow),
+  so the app is configured to keep at least one machine always running (see
+  `fly.toml`) rather than scale-to-zero.
+- Access tokens last 1 hour, but a refresh token is issued and rotated
+  alongside each one, so a client that supports the standard OAuth refresh
+  grant renews its session silently instead of prompting a fresh login.
 - Dynamic client registration is open (any client can register itself), same
   as most MCP OAuth reference implementations — the actual gate is the
   username/password login screen.

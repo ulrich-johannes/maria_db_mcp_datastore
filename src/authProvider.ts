@@ -61,6 +61,11 @@ interface IssuedToken {
   expiresAt: number;
 }
 
+interface IssuedRefreshToken {
+  clientId: string;
+  scopes: string[];
+}
+
 const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const LOGIN_TTL_MS = 5 * 60 * 1000; // 5 minutes to complete the login form
 
@@ -77,6 +82,10 @@ const LOGIN_TTL_MS = 5 * 60 * 1000; // 5 minutes to complete the login form
  * redeploy/restart, which just means connected clients need to
  * re-authenticate. There is a single user, so this is an acceptable
  * trade-off for the simplicity it buys.
+ *
+ * Access tokens are short-lived (1 hour), but refresh tokens are issued
+ * alongside them and rotated on use, so a well-behaved MCP client renews
+ * its session silently instead of prompting the login form again every hour.
  */
 export class SingleUserAuthProvider implements OAuthServerProvider {
   clientsStore = new InMemoryClientsStore();
@@ -84,6 +93,7 @@ export class SingleUserAuthProvider implements OAuthServerProvider {
   private pending = new Map<string, PendingAuthorization>();
   private codes = new Map<string, IssuedCode>();
   private tokens = new Map<string, IssuedToken>();
+  private refreshTokens = new Map<string, IssuedRefreshToken>();
 
   async authorize(
     client: OAuthClientInformationFull,
@@ -146,26 +156,44 @@ export class SingleUserAuthProvider implements OAuthServerProvider {
     }
     this.codes.delete(authorizationCode);
 
-    const token = randomUUID();
     const scopes = data.params.scopes ?? [];
+    return this.issueTokens(client.client_id, scopes);
+  }
+
+  async exchangeRefreshToken(
+    client: OAuthClientInformationFull,
+    refreshToken: string,
+    scopes?: string[]
+  ): Promise<OAuthTokens> {
+    const data = this.refreshTokens.get(refreshToken);
+    if (!data) throw new InvalidGrantError("Invalid or already-used refresh token");
+    if (data.clientId !== client.client_id) {
+      throw new InvalidGrantError("Refresh token was not issued to this client");
+    }
+    // Rotate: the old refresh token is single-use.
+    this.refreshTokens.delete(refreshToken);
+
+    return this.issueTokens(client.client_id, scopes ?? data.scopes);
+  }
+
+  private issueTokens(clientId: string, scopes: string[]): OAuthTokens {
+    const token = randomUUID();
     this.tokens.set(token, {
-      clientId: client.client_id,
+      clientId,
       scopes,
       expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS,
     });
+
+    const refreshToken = randomUUID();
+    this.refreshTokens.set(refreshToken, { clientId, scopes });
 
     return {
       access_token: token,
       token_type: "bearer",
       expires_in: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
+      refresh_token: refreshToken,
       scope: scopes.join(" "),
     };
-  }
-
-  async exchangeRefreshToken(): Promise<OAuthTokens> {
-    throw new InvalidGrantError(
-      "Refresh tokens are not supported; reconnect and re-authenticate."
-    );
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
