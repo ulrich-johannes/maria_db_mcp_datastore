@@ -47,6 +47,62 @@ export async function ensureSchema(): Promise<void> {
   `);
 }
 
+// OAuth state (registered clients, access/refresh tokens) lives in a sibling
+// table so it survives restarts and redeploys. Token ids are stored hashed.
+const OAUTH_TABLE = `\`${config.db.table}_oauth\``;
+
+export type OAuthKind = "client" | "access" | "refresh";
+
+export async function ensureOAuthSchema(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${OAUTH_TABLE} (
+      \`kind\`       VARCHAR(16)  NOT NULL,
+      \`id\`         VARCHAR(128) NOT NULL,
+      \`data\`       LONGTEXT     NOT NULL,
+      \`expires_at\` BIGINT       NULL,
+      PRIMARY KEY (\`kind\`, \`id\`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+}
+
+export async function putOAuth(
+  kind: OAuthKind,
+  id: string,
+  data: unknown,
+  expiresAtMs: number | null
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO ${OAUTH_TABLE} (kind, id, data, expires_at) VALUES (?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE data = VALUES(data), expires_at = VALUES(expires_at)`,
+    [kind, id, JSON.stringify(data), expiresAtMs]
+  );
+}
+
+export async function getOAuth<T>(
+  kind: OAuthKind,
+  id: string
+): Promise<{ data: T; expiresAt: number | null } | null> {
+  const rows = await pool.query(
+    `SELECT data, expires_at FROM ${OAUTH_TABLE} WHERE kind = ? AND id = ? LIMIT 1`,
+    [kind, id]
+  );
+  if (rows.length === 0) return null;
+  const expiresAt = rows[0].expires_at === null ? null : Number(rows[0].expires_at);
+  if (expiresAt !== null && expiresAt < Date.now()) return null;
+  return { data: JSON.parse(rows[0].data) as T, expiresAt };
+}
+
+export async function deleteOAuth(kind: OAuthKind, id: string): Promise<void> {
+  await pool.query(`DELETE FROM ${OAUTH_TABLE} WHERE kind = ? AND id = ?`, [kind, id]);
+}
+
+export async function purgeExpiredOAuth(): Promise<void> {
+  await pool.query(
+    `DELETE FROM ${OAUTH_TABLE} WHERE expires_at IS NOT NULL AND expires_at < ?`,
+    [Date.now()]
+  );
+}
+
 export class NotFoundError extends Error {}
 export class ConflictError extends Error {}
 

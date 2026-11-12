@@ -7,7 +7,7 @@ import {
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { config } from "./config";
-import { ensureSchema } from "./db";
+import { ensureSchema, ensureOAuthSchema, purgeExpiredOAuth } from "./db";
 import { buildMcpServer } from "./mcpServer";
 import {
   SingleUserAuthProvider,
@@ -17,6 +17,12 @@ import {
 
 async function main() {
   await ensureSchema();
+  await ensureOAuthSchema();
+  await purgeExpiredOAuth();
+  setInterval(
+    () => purgeExpiredOAuth().catch((err) => console.error("OAuth purge failed:", err)),
+    60 * 60 * 1000
+  ).unref();
 
   const publicUrl = new URL(config.publicUrl);
   const mcpUrl = new URL("/mcp", publicUrl);
@@ -40,6 +46,9 @@ async function main() {
       resourceServerUrl: mcpUrl,
       resourceName: "datastore-mcp state store",
       scopesSupported: ["mcp:state"],
+      // Registered clients never expire; the default 30-day secret expiry
+      // would otherwise force a re-registration and a fresh login.
+      clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
     })
   );
 

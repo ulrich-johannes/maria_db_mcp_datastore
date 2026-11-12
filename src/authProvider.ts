@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Response } from "express";
 import {
   AuthorizationParams,
@@ -16,17 +16,21 @@ import {
   InvalidTokenError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { config } from "./config";
+import { getOAuth, putOAuth } from "./db";
+
+const hashToken = (token: string) =>
+  createHash("sha256").update(token).digest("hex");
 
 /**
- * Dynamic client registration store. Any MCP client can self-register (per the
- * MCP spec's required DCR flow); the actual gate is the username/password
- * login screen in PendingAuthStore below.
+ * Dynamic client registration store, persisted in MariaDB so a registered
+ * client_id stays valid across restarts. Any MCP client can self-register
+ * (per the MCP spec's required DCR flow); the actual gate is the
+ * username/password login screen.
  */
-export class InMemoryClientsStore implements OAuthRegisteredClientsStore {
-  private clients = new Map<string, OAuthClientInformationFull>();
-
+export class DbClientsStore implements OAuthRegisteredClientsStore {
   async getClient(clientId: string) {
-    return this.clients.get(clientId);
+    const row = await getOAuth<OAuthClientInformationFull>("client", clientId);
+    return row?.data;
   }
 
   async registerClient(
@@ -40,7 +44,7 @@ export class InMemoryClientsStore implements OAuthRegisteredClientsStore {
       client_id: randomUUID(),
       client_id_issued_at: Math.floor(Date.now() / 1000),
     };
-    this.clients.set(client.client_id, client);
+    await putOAuth("client", client.client_id, client, null);
     return client;
   }
 }
@@ -55,18 +59,14 @@ interface IssuedCode {
   params: AuthorizationParams;
 }
 
-interface IssuedToken {
-  clientId: string;
-  scopes: string[];
-  expiresAt: number;
-}
-
-interface IssuedRefreshToken {
+interface StoredToken {
   clientId: string;
   scopes: string[];
 }
 
 const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+const REFRESH_GRACE_MS = 2 * 60 * 1000; // old refresh token stays valid briefly after rotation
 const LOGIN_TTL_MS = 5 * 60 * 1000; // 5 minutes to complete the login form
 
 /**
@@ -78,22 +78,20 @@ const LOGIN_TTL_MS = 5 * 60 * 1000; // 5 minutes to complete the login form
  * credentials and then calls `completeLogin` to issue the auth code and
  * perform the actual OAuth redirect.
  *
- * All state (pending logins, codes, tokens) is in-memory: it resets on
- * redeploy/restart, which just means connected clients need to
- * re-authenticate. There is a single user, so this is an acceptable
- * trade-off for the simplicity it buys.
+ * Registered clients and access/refresh tokens are persisted in MariaDB
+ * (tokens stored as SHA-256 hashes), so sessions survive restarts and
+ * redeploys. Only the short-lived pending logins and authorization codes
+ * (minutes) stay in memory.
  *
- * Access tokens are short-lived (1 hour), but refresh tokens are issued
- * alongside them and rotated on use, so a well-behaved MCP client renews
- * its session silently instead of prompting the login form again every hour.
+ * Access tokens last 1 hour; refresh tokens last 90 days and are rotated on
+ * use, so a standards-compliant MCP client renews silently instead of
+ * showing the login form again.
  */
 export class SingleUserAuthProvider implements OAuthServerProvider {
-  clientsStore = new InMemoryClientsStore();
+  clientsStore = new DbClientsStore();
 
   private pending = new Map<string, PendingAuthorization>();
   private codes = new Map<string, IssuedCode>();
-  private tokens = new Map<string, IssuedToken>();
-  private refreshTokens = new Map<string, IssuedRefreshToken>();
 
   async authorize(
     client: OAuthClientInformationFull,
@@ -165,27 +163,25 @@ export class SingleUserAuthProvider implements OAuthServerProvider {
     refreshToken: string,
     scopes?: string[]
   ): Promise<OAuthTokens> {
-    const data = this.refreshTokens.get(refreshToken);
-    if (!data) throw new InvalidGrantError("Invalid or already-used refresh token");
-    if (data.clientId !== client.client_id) {
+    const id = hashToken(refreshToken);
+    const row = await getOAuth<StoredToken>("refresh", id);
+    if (!row) throw new InvalidGrantError("Invalid or expired refresh token");
+    if (row.data.clientId !== client.client_id) {
       throw new InvalidGrantError("Refresh token was not issued to this client");
     }
-    // Rotate: the old refresh token is single-use.
-    this.refreshTokens.delete(refreshToken);
+    // Rotate, but keep the old token alive for a short grace window so a lost
+    // response or a client retry doesn't force a full re-login.
+    await putOAuth("refresh", id, row.data, Date.now() + REFRESH_GRACE_MS);
 
-    return this.issueTokens(client.client_id, scopes ?? data.scopes);
+    return this.issueTokens(client.client_id, scopes ?? row.data.scopes);
   }
 
-  private issueTokens(clientId: string, scopes: string[]): OAuthTokens {
+  private async issueTokens(clientId: string, scopes: string[]): Promise<OAuthTokens> {
     const token = randomUUID();
-    this.tokens.set(token, {
-      clientId,
-      scopes,
-      expiresAt: Date.now() + ACCESS_TOKEN_TTL_MS,
-    });
-
     const refreshToken = randomUUID();
-    this.refreshTokens.set(refreshToken, { clientId, scopes });
+    const stored: StoredToken = { clientId, scopes };
+    await putOAuth("access", hashToken(token), stored, Date.now() + ACCESS_TOKEN_TTL_MS);
+    await putOAuth("refresh", hashToken(refreshToken), stored, Date.now() + REFRESH_TOKEN_TTL_MS);
 
     return {
       access_token: token,
@@ -197,15 +193,15 @@ export class SingleUserAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const data = this.tokens.get(token);
-    if (!data || data.expiresAt < Date.now()) {
+    const row = await getOAuth<StoredToken>("access", hashToken(token));
+    if (!row || row.expiresAt === null) {
       throw new InvalidTokenError("Invalid or expired token");
     }
     return {
       token,
-      clientId: data.clientId,
-      scopes: data.scopes,
-      expiresAt: Math.floor(data.expiresAt / 1000),
+      clientId: row.data.clientId,
+      scopes: row.data.scopes,
+      expiresAt: Math.floor(row.expiresAt / 1000),
     };
   }
 }

@@ -40,13 +40,15 @@ MCP client connects.
 
 **Limitations to be aware of (fine for a personal/single-user tool, not for
 multi-tenant use):**
-- Tokens and pending logins are kept in memory, not persisted — they're lost
-  on redeploy/restart (a well-behaved client just re-runs the OAuth flow),
-  so the app is configured to keep at least one machine always running (see
-  `fly.toml`) rather than scale-to-zero.
-- Access tokens last 1 hour, but a refresh token is issued and rotated
-  alongside each one, so a client that supports the standard OAuth refresh
-  grant renews its session silently instead of prompting a fresh login.
+- Registered clients and access/refresh tokens are persisted in MariaDB (a
+  `<DB_TABLE>_oauth` table, created automatically; tokens are stored as
+  SHA-256 hashes), so sessions survive restarts and redeploys. Only pending
+  logins and authorization codes (a few minutes) live in memory.
+- Access tokens last 1 hour; refresh tokens last 90 days and rotate on use
+  (the previous one stays valid for 2 minutes), so a standards-compliant
+  client renews silently instead of prompting a fresh login.
+- Run a single machine: pending logins are in-memory, so a login started on
+  one instance can't be completed on another.
 - Dynamic client registration is open (any client can register itself), same
   as most MCP OAuth reference implementations — the actual gate is the
   username/password login screen.
